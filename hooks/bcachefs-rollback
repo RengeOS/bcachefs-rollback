@@ -9,7 +9,7 @@
 
 
 snapshot_dir=/.snapshots
-root="$snapshots_dir/@root"
+root="$snapshot_dir/@current-root"
 mountOpts='noatime,fix_errors'
 new_root=/new_root
 user=user
@@ -126,27 +126,49 @@ run_latehook() {
 			
 			echo -e "\n\nWhat would you like to do?
 
-<s> boot into a snapshot
-<r> restore snapshot
-<R> restore snapshot (uses mv)
-<u> restore snapshot (uses rysnc)
-<b> boot root system
-<n> create @root snapshot from /
-<d> delete root system
-<z> create squashfs
-<x> run squashfs
-<y> restore squashfs
-<c> boot custom dir
-<e> enter bash
-<f> fsck
-<q> quit
+--NOTE: _The snapshots that starts by default for each session is @current-root
+	so make sure you already have @current-root:) and have a good day!
 
+-*-START-LIST-OPTIONS-*-
+
+---Boot Options---
+<b> boot root system (/)
+<s> boot into a snapshot (/.snapshots/name-snapshot-folder)
+<x> boot into squashfs (name-squashfs-file.sfsquash)
+<c> boot custom dir
+
+---Restore Options---
+<p> restore root system from @current-root (using cp)
+<r> restore other snapshot to @current-root (backup old)
+<R> restore other snapshot to @current-root (using mv)
+<u> restore other snapshot using rsync
+<y> restore squashfs
+
+---Create Options---
+<C> create a new snapshot from @current-root
+<N> create a new snapshot from /
+<n> create @current-root snapshot from / (Recommend for first use)
+<z> create squashfs
+
+---Delete Options---
+<D> delete a snapshot
+<d> delete root system (Make sure you already have @current-root)
+
+---Edit Options---
+<E> rename a snapshot
+
+---Other Options---
 <w> add ro -> rw flag
 <o> add overlay flag
 <t> add tmpfs flag
 <m> add custom mount opts (Not working)
 
-<ENTER> bboot @root\n\n"
+-*-END-LIST-OPTIONS-*-
+<e> enter bash
+<f> fsck
+<q> quit
+
+<ENTER> bboot @current-root\n\n"
 
 			read -sn 1 key
 
@@ -235,6 +257,28 @@ run_latehook() {
 
 			finished=true
 
+		elif [[ "$key" = 'D' ]]; then
+			echo -e "\nAvailable snapshots:"
+			ls -d "$mnt$snapshot_dir"/*/ 2>/dev/null | sed "s|$mnt$snapshot_dir/||g" | sed 's|/||g' | grep -v "@current-root"
+			echo -e "\nEnter the name of the snapshot to delete:"
+			read snapshot_name
+			if [ -z "$snapshot_name" ]; then
+				error "Snapshot name cannot be empty."
+			else
+				snapshot_path="$snapshot_dir/$snapshot_name"
+				if [ -d "$mnt$snapshot_path" ] && [ "$snapshot_name" != "@current-root" ]; then
+					echo "Delete snapshot $snapshot_path? (y/n)"
+					read confirm
+					if [[ $confirm = 'y' ]]; then
+						bcachefs subvolume delete "$mnt$snapshot_path"
+						echo "Snapshot deleted."
+					else
+						echo "Cancelled."
+					fi
+				else
+					error "Invalid snapshot name or cannot delete @current-root."
+				fi
+			fi
 		elif [[ "$key" = 'y' ]]; then
 			
 			ls ${mnt} "$mnt$snapshot_dir"
@@ -261,6 +305,79 @@ run_latehook() {
 			umount "$new_root"
 			
 			echo "All done"
+
+		elif [[ "$key" = 'C' ]]; then
+			echo -e "\nEnter a name for the new snapshot:"
+			read snapshot_name
+			if [ -z "$snapshot_name" ]; then
+				error "Snapshot name cannot be empty."
+			else
+				snapshot_target="$snapshot_dir/@created-root-$snapshot_name"
+				if [ -d "$mnt$snapshot_target" ]; then
+					error "Snapshot $snapshot_target already exists."
+				else
+					echo "Create snapshot from $root to $snapshot_target? (y/n)"
+					read confirm
+					if [[ $confirm = 'y' ]]; then
+						bcachefs subvolume snapshot "$mnt$root" "$mnt$snapshot_target"
+						echo "Snapshot created."
+					else
+						echo "Cancelled."
+					fi
+				fi
+			fi
+
+elif [[ "$key" = 'N' ]]; then
+    if [ -d "$mnt/etc" ]; then
+        echo -e "\nEnter a name for the new snapshot will be create from /:"
+        read snapshot_name
+        if [ -z "$snapshot_name" ]; then
+            error "Snapshot name cannot be empty."
+        else
+            snapshot_target="$snapshot_dir/@created-root-$snapshot_name"
+            if [ -d "$mnt$snapshot_target" ]; then
+                error "Snapshot $snapshot_target already exists."
+            else 
+                echo "Create snapshot from / to $snapshot_target? (y/n)"
+                read confirm
+                if [[ $confirm = 'y' ]]; then
+                    bcachefs subvolume snapshot "$mnt" "$mnt$snapshot_target"
+                    echo "Snapshot created."
+                else
+                    echo "Cancelled."
+                fi
+            fi
+        fi
+    else
+        error "No system found at /."
+    fi
+
+
+		elif [[ "$key" = 'E' ]]; then
+			echo -e "\nAvailable snapshots:"
+			ls -d "$mnt$snapshot_dir"/*/ 2>/dev/null | sed "s|$mnt$snapshot_dir/||g" | sed 's|/||g' | grep -v "@current-root"
+			echo -e "\nEnter the current name of the snapshot:"
+			read old_name
+			echo "Enter the new name for the snapshot:"
+			read new_name
+			if [ -z "$old_name" ] || [ -z "$new_name" ]; then
+				error "Names cannot be empty."
+			else
+				old_path="$snapshot_dir/$old_name"
+				new_path="$snapshot_dir/$new_name"
+				if [ -d "$mnt$old_path" ] && [ ! -d "$mnt$new_path" ] && [ "$old_name" != "@current-root" ]; then
+					echo "Rename $old_path to $new_path? (y/n)"
+					read confirm
+					if [[ $confirm = 'y' ]]; then
+						mv "$mnt$old_path" "$mnt$new_path"
+						echo "Snapshot renamed."
+					else
+						echo "Cancelled."
+					fi
+				else
+					error "Invalid old name or new name already exists, or trying to rename @current-root."
+				fi
+			fi
 
 		elif [[ "$key" = 'o' ]]; then
 	
@@ -375,12 +492,12 @@ run_latehook() {
 	
 			if [ -d "$mnt$snapshot_dir/$snapshot" ]; then
 			
-				if [ -d "$mnt$snapshot_dir$root-old" ]; then
-					bcachefs subvolume delete "$mnt$snapshot_dir$root-old"
+				if [ -d "$mnt$snapshot_dir/@previous-root" ]; then
+					bcachefs subvolume delete "$mnt$snapshot_dir/@previous-root"
 				fi
 
 				if [ -d "$mnt$root" ]; then
-					bcachefs subvolume snapshot "$mnt$root" "$mnt$snapshot_dir$root-old"
+					bcachefs subvolume snapshot "$mnt$root" "$mnt$snapshot_dir/@previous-root"
 					bcachefs subvolume delete $mnt$root
 				fi
 
@@ -399,16 +516,52 @@ run_latehook() {
 			echo "Entering bash..."
 			bash
 	
+		elif [[ "$key" = 'p' ]]; then
+	
+			# Make sure there is a system at @root before proceeding
+			# You must keep .snapshots and @root in / or the system won't start
+			if [ ! -d $mnt/etc ]; then
+
+				echo "Restoring / (excepting .snapshots and $root) and wait for a long time..."
+			
+				cp -a $mnt$root/bin /mnt/bin > /dev/null 2>&1
+				cp -a $mnt$root/boot /mnt/boot > /dev/null 2>&1
+				cp -a $mnt$root/dev /mnt/dev > /dev/null 2>&1
+				cp -a $mnt$root/efi /mnt/efi > /dev/null 2>&1
+				cp -a $mnt$root/etc /mnt/etc > /dev/null 2>&1
+				cp -a $mnt$root/home /mnt/home > /dev/null 2>&1
+				cp -a $mnt$root/lib /mnt/lib > /dev/null 2>&1
+				cp -a $mnt$root/lib64 /mnt/lib64 > /dev/null 2>&1
+				cp -a $mnt$root/'lost+found' /mnt/'lost+found' > /dev/null 2>&1
+				cp -a $mnt$root/opt /mnt/opt > /dev/null 2>&1
+				cp -a $mnt$root/proc /mnt/proc > /dev/null 2>&1
+				cp -a $mnt$root/root /mnt/root > /dev/null 2>&1
+				cp -a $mnt$root/run /mnt/run > /dev/null 2>&1
+				cp -a $mnt$root/sbin /mnt/sbin > /dev/null 2>&1
+				cp -a $mnt$root/srv /mnt/srv > /dev/null 2>&1
+				cp -a $mnt$root/sys /mnt/sys > /dev/null 2>&1
+				cp -a $mnt$root/tmp /mnt/tmp > /dev/null 2>&1
+				cp -a $mnt$root/usr /mnt/usr > /dev/null 2>&1
+				cp -a $mnt$root/var /mnt/var > /dev/null 2>&1
+
+				echo "Done! restored / from @current-root"
+			
+			else
+			
+				error "Already have root system at /. Will not restore main system from @current-root."
+		
+			fi
+
 		elif [[ "$key" = 'd' ]]; then
 	
 			# Make sure there is a system at @root before proceeding
 			# You must keep .snapshots and @root in / or the system won't start
 			if [ -d $mnt$root/etc ]; then
 
-				echo "Deleting / (excepting .snapshots and $root)..."
+				echo "Deleting / (excepting .snapshots and $root) and wait for a long time..."
 			
-				rm -rf /mnt/bin /mnt/boot /mnt/dev /mnt/efi /mnt/etc /mnt/home /mnt/lib /mnt/lib64 /mnt/'lost+found' /mnt/opt /mnt/proc /mnt/root /mnt/run /mnt/sbin /mnt/srv /mnt/sys /mnt/tmp /mnt/usr /mnt/var
-			
+				rm -rf /mnt/bin /mnt/boot /mnt/dev /mnt/efi /mnt/etc /mnt/home /mnt/lib /mnt/lib64 /mnt/'lost+found' /mnt/opt /mnt/proc /mnt/root /mnt/run /mnt/sbin /mnt/srv /mnt/sys /mnt/tmp /mnt/usr /mnt/var > /dev/null 2>&1
+				echo "Done! deleted / (excepting .snapshots and $root)"
 			else
 			
 				error "No system located at $root. Will not delete main system."
